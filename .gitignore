@@ -1,3 +1,7 @@
+# Folders
+log/
+obj/
+
 # Compiled Object files
 *.slo
 *.lo
