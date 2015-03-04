@@ -8,10 +8,20 @@ using std::cout;
 using std::endl;
 using std::bitset;
 using std::fill;
+using std::copy;
 using std::hex;
 using std::dec;
 using std::setw;
 using std::left;
+
+// Used in decoding tables.
+const uint8_t MEM_HL = 255;
+const uint8_t REG_SP = 255;
+
+#define BIT16_FROM_MEM(A)  ((((uint16_t)(mem[(A)+1])) << 8) + mem[(A)])
+#define CC_TEST(CC,Y,F) ((Y) % 2 ? ((F) & CC[(Y)]) : !((F) & CC[(Y)]))
+#define BIT(X, N) ((X) & (1 << (N)))
+
 
 CPU::CPU()
 {
@@ -24,10 +34,33 @@ CPU::CPU()
 
     interrupts = true;
 
+    uint8_t instr[] = { 0x3e, 0xff, 0x0e, 0x06, 
+                        0xe2, 0xf0, 0x06,
+                        0x08, 0x03, 0xff,
+                        0xf8, 0xff, 0xf9,
+                        0xcb, 0x36,
+                        0xcb, 0x17,
+                        0xcb, 0x17,
+                        0xcb, 0xc0,
+                        0x76 };
+    uint8_t num_instr = sizeof(instr)/sizeof(*instr);
 
-    ld8(reg8[REG_A], 0xd7);
-    ld16(reg16(REG_HL), 0x0a08);
-    ld16(reg16(REG_BC), 0xf5f7);
+    copy(instr, instr + num_instr, &(mem[pc]));
+
+    // A = max(A, B)
+    //                   cp B  jr NC       ld A,B ret
+    uint8_t instr2[] = { 0xb8, 0x30, 0x03, 0x78, 0xc9 };
+    num_instr = sizeof(instr)/sizeof(*instr);
+
+    copy(instr2, instr2 + num_instr, &(mem[0x8000]));
+
+    while(mem[pc] != 0x76) {
+        cout << hex << "PC=" << (int)pc << "  SP=" << (int)sp;
+        cout << "  OP=" << (int)mem[pc] << dec << endl;
+        fetch_decode_execute();
+    }
+
+    print_mem(0xff03, 0xff07);
 
 } // Constructor
 
@@ -69,6 +102,363 @@ void CPU::print_mem(uint16_t begin, uint16_t end) const
     cout << dec;
 } // print_mem()
 
+void CPU::fetch_decode_execute()
+{
+    uint8_t opcode = mem[pc];
+    uint8_t x = opcode >> 6, y = (opcode & 0x38) >> 3, z = opcode & 0x07;
+    uint8_t p = y >> 1, q = y % 2;
+
+    Reg8 F = reg8[REG_F];
+
+    // 8bit register table.
+    static const uint8_t r[8] = { REG_B, REG_C, REG_D, REG_E, REG_H, 
+                                  REG_L, MEM_HL, REG_A };
+    // Register pairs featuring SP.
+    static const uint8_t rp[4] = { REG_BC, REG_DE, REG_HL, REG_SP };
+    // Register pairs featuring AF.
+    static const uint8_t rp2[4] = { REG_BC, REG_DE, REG_HL, REG_AF };
+    // Conditions
+    static const uint8_t cc[4] = { FLAG_Z, FLAG_Z, FLAG_C, FLAG_C };
+    // Arithmetic and logic operations.
+    typedef void (CPU::*ALUOp)(uint8_t);
+    static const ALUOp alu[8] = { &CPU::add8, &CPU::addc8, &CPU::sub8, 
+                                  &CPU::subc8, &CPU::and8, &CPU::xor8,
+                                  &CPU::or8, &CPU::cp8 };
+    // Rotate and shift operations.
+    typedef void (CPU::*RotOp)(uint8_t&);
+    static const RotOp rot[8] = { &CPU::rlc8, &CPU::rrc8, &CPU::rl8, 
+                                  &CPU::rr8, &CPU::sla8, &CPU::sra8,
+                                  &CPU::srl8, &CPU::srl8 };
+
+    if(opcode == 0xcb) { // Handle-CB prefixed opcodes
+        pc++;
+        opcode = mem[pc];
+        x = opcode >> 6, y = (opcode & 0x38) >> 3, z = opcode & 0x07;
+        switch(x) {
+            case 0x0:
+                if(y == 0x6) {
+                    swap8(reg8[r[z]]);
+                } else {
+                    (this->*rot[y])(reg8[r[z]]);
+                }
+                pc++;
+                break;
+            case 0x1: // Test bit
+                bit(reg8[r[z]], y);
+                pc++;
+                break;
+            case 0x2: // Reset bit
+                res(reg8[r[z]], y);
+                pc++;
+                break;
+            case 0x3: // Set bit
+                set(reg8[r[z]], y);
+                pc++;
+                break;
+        }
+        return;
+    }
+
+    switch(x) {
+        case 0x0:
+            switch(z) {
+                case 0x0: 
+                    switch(y) {
+                        case 0x0: // NOP
+                            pc++;
+                            break;
+                        case 0x1: // LD (nn),SP
+                            mem[BIT16_FROM_MEM(pc+1)] = sp & 0x00ff;
+                            mem[BIT16_FROM_MEM(pc+1)+1] = (sp & 0xff00)>>8;
+                            pc += 3;
+                            break;
+                        case 0x2: // TODO: STOP
+                            while(true);
+                            pc++;
+                            break;
+                        case 0x3: // Jump relative
+                            jr(mem[pc+1]);
+                            break;
+                        case 0x4:
+                        case 0x5:
+                        case 0x6:
+                        case 0x7: // Jump relative conditional
+                            if(CC_TEST(cc,y-4,F))
+                                jr(mem[pc+1]);
+                            else
+                                pc += 2;
+                            break;
+                    }
+                    break;
+                case 0x1:
+                    if(q == 0x0) { // 16bit load imm 
+                        uint16_t imm = BIT16_FROM_MEM(pc+1);
+                        if(rp[p] == REG_SP) 
+                            sp = imm;
+                        else 
+                            reg16(rp[p]) = imm;
+                        pc += 3;
+                    } else { // Add reg16 to HL
+                        if(rp[p] == REG_SP) 
+                            add16_hl(sp);
+                        else 
+                            add16_hl(reg16(rp[p]));
+                        pc++;
+                    }
+                    break;
+                case 0x2: // Indirect loading
+                    if(q == 0x0) {
+                        switch(p) {
+                            case 0x0:
+                                mem[reg16(REG_BC)] = reg8[REG_A];
+                                pc++;
+                                break;
+                            case 0x1:
+                                mem[reg16(REG_BC)] = reg8[REG_A];
+                                pc++;
+                                break;
+                            case 0x2: // LDI (HL),A
+                                mem[reg16(REG_HL)] = reg8[REG_A];
+                                inc16(reg16(REG_HL));
+                                pc++;
+                                break;
+                            case 0x3: // LDD (HL),A
+                                mem[reg16(REG_HL)] = reg8[REG_A];
+                                dec16(reg16(REG_HL));
+                                pc++;
+                                break;
+                        }
+                    } else {
+                        switch(p) {
+                            case 0x0:
+                                reg8[REG_A] = mem[reg16(REG_BC)];
+                                pc++;
+                                break;
+                            case 0x1:
+                                reg8[REG_A] = mem[reg16(REG_DE)];
+                                pc++;
+                                break;
+                            case 0x2: // LDI A,(HL)
+                                reg8[REG_A] = mem[reg16(REG_HL)];
+                                inc16(reg16(REG_HL));
+                                pc++;
+                                break;
+                            case 0x3: // LDD A,(HL)
+                                reg8[REG_A] = mem[reg16(REG_HL)];
+                                dec16(reg16(REG_HL));
+                                pc++;
+                                break;
+                        }
+                    }
+                    break;
+                case 0x3: 
+                    if(q == 0x0) { // 16bit inc
+                        if(rp[p] == REG_SP)
+                            inc16(sp);
+                        else 
+                            inc16(reg16(rp[p]));
+                    } else { // 16bit dec
+                        if(rp[p] == REG_SP)
+                            dec16(sp);
+                        else 
+                            dec16(reg16(rp[p]));
+                    }
+                    pc++;
+                    break;
+                case 0x4: // 8bit inc
+                    if(r[y] == MEM_HL) 
+                        inc8(mem[reg16(REG_HL)]);
+                    else 
+                        inc8(reg8[r[y]]);
+                    pc++;
+                    break;
+                case 0x5: // 8bit dec 
+                    if(r[y] == MEM_HL) 
+                        dec8(mem[reg16(REG_HL)]);
+                    else 
+                        dec8(reg8[r[y]]);
+                    pc++;
+                    break;
+                case 0x6: // 8bit load imm
+                    if(r[y] == MEM_HL) 
+                        mem[reg16(REG_HL)] = mem[pc+1];
+                    else 
+                        reg8[r[y]] = mem[pc+1];
+                    pc += 2;
+                    break;
+                case 0x7: 
+                    switch(y) {
+                        case 0x0: // Rotate A left to carry
+                            rlc8(reg8[REG_A]);
+                            pc++;
+                            break;
+                        case 0x1: // Rotate A right to carry
+                            rrc8(reg8[REG_A]);
+                            pc++;
+                            break;
+                        case 0x2: // Rotate A left through carry
+                            rl8(reg8[REG_A]) ;
+                            pc++;
+                            break;
+                        case 0x3: // Rotate A right through carry
+                            rr8(reg8[REG_A]);
+                            pc++;
+                            break;
+                        case 0x4: // TODO: DAA
+                            pc++;
+                            break;
+                        case 0x5: // Complement A
+                            cpl();
+                            pc++;
+                            break;
+                        case 0x6: // Set carry flag
+                            scf();
+                            pc++;
+                            break;
+                        case 0x7: // Complement carry flag
+                            ccf();
+                            pc++;
+                            break;
+                    }
+            }
+            break;
+        case 0x1: 
+            if(z == 0x6 && y == 0x6) {
+                // TODO: HALT TEMP
+                while(true);
+            }
+            // 8bit load of reg/mem
+            if(r[y] == MEM_HL) 
+                mem[reg16(REG_HL)] = reg8[r[z]];
+            else if(r[z] == MEM_HL)
+                reg8[r[y]] = mem[reg16(REG_HL)];
+            else 
+                reg8[r[y]] = reg8[r[z]];
+            pc++;
+            break;
+        case 0x2:
+            // ALU operation on reg/mem
+            if(r[z] == MEM_HL) 
+                (this->*alu[y])(mem[reg16(REG_HL)]);
+            else 
+                (this->*alu[y])(reg8[r[z]]);
+            pc++;
+            break;
+        case 0x3:
+            switch(z) {
+                case 0x0: 
+                    switch(y) {
+                        case 0x0: // Conditional return
+                            if(CC_TEST(cc,y,F))
+                                ret();
+                            else 
+                                pc++;
+                            break;
+                        case 0x4: 
+                            mem[0xff00 + mem[pc+1]] = reg8[REG_A];
+                            pc += 2;
+                            break;
+                        case 0x5: 
+                            add16_sp(mem[pc+1]);
+                            pc += 2;
+                            break;
+                        case 0x6:
+                            reg8[REG_A] = mem[0xff00 + mem[pc+1]];
+                            pc += 2;
+                            break;
+                        case 0x7: // LD HL,SP+n
+                            reg16(REG_HL) = sp + mem[pc+1];
+                            pc += 2;
+                            break;
+                    }
+                    break;
+                case 0x1: 
+                    if(q == 0x0) { // Pop
+                        pop(reg16(rp2[p]));
+                        pc++;
+                    } else {
+                        switch(p) {
+                            case 0x0: 
+                                ret();
+                                break;
+                            case 0x1:
+                                ret();
+                                interrupts = true;
+                                break;
+                            case 0x2:
+                                jp(reg16(REG_HL));
+                                break;
+                            case 0x3:
+                                sp = reg16(REG_HL);
+                                pc++;
+                                break;
+                        }
+                    }
+                    break;
+                case 0x2: 
+                    switch(y) {
+                        case 0x0:
+                        case 0x1:
+                        case 0x2:
+                        case 0x3:
+                            // Conditional jump
+                            if(CC_TEST(cc,y,F))
+                                jp(BIT16_FROM_MEM(pc+1));
+                            else 
+                                pc += 3;
+                            break;
+                        case 0x4:
+                            mem[0xff00 + reg8[REG_C]] = reg8[REG_A];
+                            pc++;
+                            break;
+                        case 0x6:
+                            reg8[REG_A] = mem[0xff00 + reg8[REG_C]];
+                            pc++;
+                            break;
+                    }
+                    break;
+                case 0x3: 
+                    switch(y) {
+                        case 0x0: // Jump
+                            jp(BIT16_FROM_MEM(pc+1));
+                            break;
+                        case 0x6: 
+                            interrupts = false;
+                            pc++;
+                            break;
+                        case 0x7:
+                            interrupts = true;
+                            pc++;
+                            break;
+                    }
+                    break;
+                case 0x4: // Conditional call
+                    if(CC_TEST(cc,y,F)) 
+                        call(BIT16_FROM_MEM(pc+1));
+                    else 
+                        pc += 3;
+                    break;
+                case 0x5: 
+                    if(q == 0x0) { // Push
+                        push(reg16(rp2[p]));
+                        pc++;
+                    } else {  // Call
+                        call(BIT16_FROM_MEM(pc+1));
+                    }
+                    break;
+                case 0x6: // ALU op with imm
+                    (this->*alu[y])(mem[pc+1]);
+                    pc += 2;
+                    break;
+                case 0x7: // Restart
+                    push(pc + 3);
+                    jp(y*8);
+                    break;
+            }
+            break;
+    }
+} // fetch_decode_execute()
+
 void CPU::add8(uint8_t n) 
 {
     Reg8 &A = reg8[REG_A], &F = reg8[REG_F], A_old = reg8[REG_A];
@@ -100,9 +490,10 @@ void CPU::sub8(uint8_t n)
     F |= FLAG_N;
     if(A == 0)
         F |= FLAG_Z;
-    if(~BIT(A, 3) && BIT(n, 3)) 
+    if((A_old & 0x0f) < (n & 0x0f))
         F |= FLAG_H;
-    if(~BIT(A_old, 7) && BIT(n, 7))
+    if((A_old & 0xf0) < (n & 0xf0) 
+      || (((A_old & 0xf0) == 0) && (F & FLAG_H)))
         F |= FLAG_C;
 } // sub8()
 
@@ -244,7 +635,10 @@ void CPU::scf()
 void CPU::bit(Reg8 r, uint8_t b)
 {
     Reg8 &F = reg8[REG_F];
-    F |= BIT(r, b) ? 0x0 : FLAG_Z;
+    if(BIT(r, b))
+        F &= ~FLAG_Z;
+    else 
+        F |= FLAG_Z;
     F &= ~FLAG_N;
     F |= FLAG_H;
 } // bit()
@@ -314,6 +708,17 @@ void CPU::sra8(uint8_t &n)
     F &= ~(FLAG_N | FLAG_H);
     lsb ? F |= FLAG_C : F &= ~FLAG_C;
 } // sra8()
+
+void CPU::srl8(uint8_t &n)
+{
+    uint8_t msb = BIT(n, 7);
+    n = n >> 1;
+    Reg8 &F = reg8[REG_F];
+    if(n == 0) 
+        F |= FLAG_Z;
+    F &= ~(FLAG_N | FLAG_H);
+    msb ? F |= FLAG_C : F &= ~FLAG_C;
+} // srl8()
 
 void CPU::jp(uint16_t addr)
 {

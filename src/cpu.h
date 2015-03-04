@@ -3,7 +3,6 @@
 
 #include <stdint.h>
 
-#define BIT(X, N) ((X) & (1 << (N)))
 
 // 8bit registers
 // Lower 8 bits of 16bit registers stored first due to endianess. 
@@ -18,6 +17,8 @@ const uint8_t REG_E = 4;
 
 const uint8_t REG_H = 7;
 const uint8_t REG_L = 6;
+
+
 
 // 16bit registers
 const uint8_t REG_AF = 0;
@@ -68,13 +69,11 @@ class CPU {
 
         bool interrupts;
 
+        void fetch_decode_execute();
+
     //
     // Instruction Functions
     //
-
-        // Load val (reg, imm, or mem) into dest(reg or mem).
-        void ld8(uint8_t &dest, uint8_t val) { dest = val; };
-        void ld16(uint16_t &dest, uint16_t val) { dest = val; };
 
         // For these ops, n is a reg, imm, or mem val. 
         // Result stored in A.
@@ -99,6 +98,7 @@ class CPU {
         // Shifts left or right.
         void sla8(uint8_t &n);
         void sra8(uint8_t &n);
+        void srl8(uint8_t &n);
 
         // Add Reg16 to HL.
         void add16_hl(Reg16 r);
