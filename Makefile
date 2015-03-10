@@ -2,7 +2,7 @@ CC=g++
 CPP_FILES := $(wildcard src/*.cpp)
 OBJ_FILES := $(addprefix obj/,$(notdir $(CPP_FILES:.cpp=.o)))
 LD_FLAGS := 
-CC_FLAGS := -Wall -MMD -g 
+CC_FLAGS := -Wall -MMD -g -std=c++11
 TARGET=gbemu.out
 
 all: directories ${TARGET}

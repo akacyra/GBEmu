@@ -1,463 +1,697 @@
 #include "cpu.h"
 #include <iostream>
 #include <iomanip>
-#include <bitset>
-#include <algorithm>
 
 using std::cout;
 using std::endl;
-using std::bitset;
-using std::fill;
-using std::copy;
-using std::hex;
-using std::dec;
 using std::setw;
-using std::left;
+using std::vector;
 
-// Used in decoding tables.
-const uint8_t MEM_HL = 255;
-const uint8_t REG_SP = 255;
 
-#define BIT16_FROM_MEM(A)  ((((uint16_t)(mem[(A)+1])) << 8) + mem[(A)])
 #define CC_TEST(CC,Y,F) ((Y) % 2 ? ((F) & CC[(Y)]) : !((F) & CC[(Y)]))
 #define BIT(X, N) ((X) & (1 << (N)))
 
 
-CPU::CPU()
+CPU::CPU() : op_table(build_op_table()), mem(65536)
 {
-    pc = 0x100;
-    sp = 0xFFFE;
-
-    fill(reg8, reg8 + NUM_REG8, 0x0);
-
-    fill(mem, mem + MEM_SIZE, 0x00);
+    PC = 0x100;
+    SP = 0xFFFE;
 
     interrupts = true;
 
-    uint8_t instr[] = { 0x3e, 0xff, 0x0e, 0x06, 
-                        0xe2, 0xf0, 0x06,
-                        0x08, 0x03, 0xff,
-                        0xf8, 0xff, 0xf9,
-                        0xcb, 0x36,
-                        0xcb, 0x17,
-                        0xcb, 0x17,
-                        0xcb, 0xc0,
-                        0x76 };
-    uint8_t num_instr = sizeof(instr)/sizeof(*instr);
+    AF.set_high(0x69);
 
-    copy(instr, instr + num_instr, &(mem[pc]));
+    uint8_t instr[] = { 0x38, 0x04, 0x31, 0x00, 0x80, 0x36, 0x05, 0x34, 0x34, 0x3a, 0x76 };
+                        
+    int n = sizeof(instr)/sizeof(*instr);
+    vector<uint8_t> data(instr, instr + n);
 
-    // A = max(A, B)
-    //                   cp B  jr NC       ld A,B ret
-    uint8_t instr2[] = { 0xb8, 0x30, 0x03, 0x78, 0xc9 };
-    num_instr = sizeof(instr)/sizeof(*instr);
+    mem.load_bytes_to(0x100, data);
 
-    copy(instr2, instr2 + num_instr, &(mem[0x8000]));
-
-    while(mem[pc] != 0x76) {
-        cout << hex << "PC=" << (int)pc << "  SP=" << (int)sp;
-        cout << "  OP=" << (int)mem[pc] << dec << endl;
-        fetch_decode_execute();
+    int c = 0;
+    while(mem[PC] != 0x76) {
+        cout << std::hex << "0x" << (int) mem[PC] << std::dec << endl;
+        op_table[mem[PC]]();
+        PC++;
+        c += cycles;
     }
-
-    print_mem(0xff03, 0xff07);
+    cout << "CYCLES: " << c << endl;
+    mem.print(cout, 0x0000, 0x0001);
 
 } // Constructor
 
 void CPU::print_registers() const
 {
-    cout << endl;
-    cout << "PC = 0x" << hex << pc << dec << endl;
-    cout << "SP = 0x" << hex << sp << dec << endl << endl; 
-    for(int i = 0; i < NUM_REG8 / 2; i++) {
-        print_register(2*i+1);
-        print_register(2*i);
-        cout << endl;
-    }
+    cout << "PC -> " << setw(2) << PC << "    SP -> " << setw(2) << SP << endl; 
+    cout << "AF -> " << setw(2) << AF << "    BC -> " << setw(2) << BC << endl; 
+    cout << "DE -> " << setw(2) << DE << "    HL -> " << setw(2) << HL << endl; 
 } // print_registers()
 
-void CPU::print_register(uint8_t reg_id) const
+const vector<CPU::Instruction> CPU::build_op_table() 
 {
-    static const Reg8 reg8_names[NUM_REG8] = 
-        { 'F', 'A', 'C', 'B', 'E', 'D', 'L', 'H' };
-    cout << "Reg " << reg8_names[reg_id]
-         << " = " << (bitset<8>) reg8[reg_id] << endl;
-} // print_register()
-
-void CPU::print_mem(uint16_t addr) const 
-{
-    cout << "0x" << hex << addr << " = 0x" << (int)mem[addr] << dec << endl;
-} // print_mem()
-
-void CPU::print_mem(uint16_t begin, uint16_t end) const
-{
-    cout << hex;
-    for(uint16_t i = begin, j; i != end; i = j) { 
-        for(j = i; j != end && j < i + 4; j++) {
-            cout << "0x" << j << " = 0x" << setw(2) << left 
-                 << (int)mem[j] << "  ";
+    vector<Instruction> ops(256);
+    ops[0x00] = [this]() { // NOP 
+        cycles = 4;
+    };
+    ops[0x01] = [this]() { // LD BC,nn
+        load16_imm(BC);
+        cycles = 12;
+    };
+    ops[0x02] = [this]() { // LD (BC),A
+        mem[BC] = AF.high(); 
+        cycles = 8;
+    };
+    ops[0x03] = [this]() { // INC BC
+        BC++;
+        cycles = 8;
+    };
+    ops[0x04] = [this]() { // INC B
+        BC.set_high(inc8(BC.high()));
+        cycles = 4;
+    };
+    ops[0x05] = [this]() { // DEC B
+        BC.set_high(dec8(BC.high()));
+        cycles = 4;
+    };
+    ops[0x06] = [this]() { // LD B,n
+        BC.set_high(mem[++PC]);
+        cycles = 8;
+    };
+    ops[0x07] = [this]() { // RLCA
+        AF.set_high(rlc8(AF.high()));
+        cycles = 4;
+    };
+    ops[0x08] = [this]() { // LD (nn),SP
+        mem.set16(mem.get16(++PC), SP);
+        PC++;
+        cycles = 20;
+    };
+    ops[0x09] = [this]() { // ADD HL,BC
+        add16_hl(BC);
+        cycles = 8;
+    };
+    ops[0x0a] = [this]() { // LD A,(BC)
+        AF.set_high(mem[BC]);
+        cycles = 8;
+    };
+    ops[0x0b] = [this]() { // DEC BC
+        BC--;
+        cycles = 8;
+    };
+    ops[0x0c] = [this]() { // INC C
+        BC.set_low(inc8(BC.low()));
+        cycles = 4;
+    };
+    ops[0x0d] = [this]() { // DEC C
+        BC.set_low(dec8(BC.low()));
+        cycles = 4;
+    };
+    ops[0x0e] = [this]() { // LD C,n
+        BC.set_low(mem[++PC]);
+        cycles = 8;
+    };
+    ops[0x0f] = [this]() { // RRCA
+        AF.set_high(rrc8(AF.high()));
+        cycles = 4;
+    };
+    ops[0x10] = [this]() { // STOP
+        while(true) // TODO: Implement STOP
+        cycles = 4;
+    };
+    ops[0x11] = [this]() { // LD DE,nn
+        load16_imm(DE);
+        cycles = 12;
+    };
+    ops[0x12] = [this]() { // LD (DE),A
+        mem[DE] = AF.high(); 
+        cycles = 8;
+    };
+    ops[0x13] = [this]() { // INC DE
+        DE++;
+        cycles = 8;
+    };
+    ops[0x14] = [this]() { // INC D
+        DE.set_high(inc8(DE.high()));
+        cycles = 4;
+    };
+    ops[0x15] = [this]() { // DEC D
+        DE.set_high(dec8(DE.high()));
+        cycles = 4;
+    };
+    ops[0x16] = [this]() { // LD D,n
+        DE.set_high(mem[++PC]);
+        cycles = 8;
+    };
+    ops[0x17] = [this]() { // RLA
+        AF.set_high(rl8(AF.high()));
+        cycles = 4;
+    };
+    ops[0x18] = [this]() { // JR n
+        PC = PC + mem[++PC];
+        cycles = 12;
+    };
+    ops[0x19] = [this]() { // ADD HL,DE
+        add16_hl(DE);
+        cycles = 8;
+    };
+    ops[0x1a] = [this]() { // LD A,(DE)
+        AF.set_high(mem[DE]);
+        cycles = 8;
+    };
+    ops[0x1b] = [this]() { // DEC DE
+        DE--;
+        cycles = 8;
+    };
+    ops[0x1c] = [this]() { // INC E
+        DE.set_low(inc8(DE.low()));
+        cycles = 4;
+    };
+    ops[0x1d] = [this]() { // DEC E
+        DE.set_low(dec8(DE.low()));
+        cycles = 4;
+    };
+    ops[0x1e] = [this]() { // LD E,n
+        DE.set_low(mem[++PC]);
+        cycles = 8;
+    };
+    ops[0x1f] = [this]() { // RRA
+        AF.set_high(rr8(AF.high()));
+        cycles = 4;
+    };
+    ops[0x20] = [this]() { // JR NZ,n
+        if(!(AF.low() & FLAG_Z)) {
+            PC = PC + mem[++PC];
+            cycles = 12;
+        } else {
+            PC++;
+            cycles = 8;
         }
-        cout << endl;
-    }
-    cout << dec;
-} // print_mem()
-
-void CPU::fetch_decode_execute()
-{
-    uint8_t opcode = mem[pc];
-    uint8_t x = opcode >> 6, y = (opcode & 0x38) >> 3, z = opcode & 0x07;
-    uint8_t p = y >> 1, q = y % 2;
-
-    Reg8 F = reg8[REG_F];
-
-    // 8bit register table.
-    static const uint8_t r[8] = { REG_B, REG_C, REG_D, REG_E, REG_H, 
-                                  REG_L, MEM_HL, REG_A };
-    // Register pairs featuring SP.
-    static const uint8_t rp[4] = { REG_BC, REG_DE, REG_HL, REG_SP };
-    // Register pairs featuring AF.
-    static const uint8_t rp2[4] = { REG_BC, REG_DE, REG_HL, REG_AF };
-    // Conditions
-    static const uint8_t cc[4] = { FLAG_Z, FLAG_Z, FLAG_C, FLAG_C };
-    // Arithmetic and logic operations.
-    typedef void (CPU::*ALUOp)(uint8_t);
-    static const ALUOp alu[8] = { &CPU::add8, &CPU::addc8, &CPU::sub8, 
-                                  &CPU::subc8, &CPU::and8, &CPU::xor8,
-                                  &CPU::or8, &CPU::cp8 };
-    // Rotate and shift operations.
-    typedef void (CPU::*RotOp)(uint8_t&);
-    static const RotOp rot[8] = { &CPU::rlc8, &CPU::rrc8, &CPU::rl8, 
-                                  &CPU::rr8, &CPU::sla8, &CPU::sra8,
-                                  &CPU::srl8, &CPU::srl8 };
-
-    if(opcode == 0xcb) { // Handle-CB prefixed opcodes
-        pc++;
-        opcode = mem[pc];
-        x = opcode >> 6, y = (opcode & 0x38) >> 3, z = opcode & 0x07;
-        switch(x) {
-            case 0x0:
-                if(y == 0x6) {
-                    swap8(reg8[r[z]]);
-                } else {
-                    (this->*rot[y])(reg8[r[z]]);
-                }
-                pc++;
-                break;
-            case 0x1: // Test bit
-                bit(reg8[r[z]], y);
-                pc++;
-                break;
-            case 0x2: // Reset bit
-                res(reg8[r[z]], y);
-                pc++;
-                break;
-            case 0x3: // Set bit
-                set(reg8[r[z]], y);
-                pc++;
-                break;
+    };
+    ops[0x21] = [this]() { // LD HL,nn
+        load16_imm(HL);
+        cycles = 12;
+    };
+    ops[0x22] = [this]() { // LD (HL+),A
+        mem[HL] = AF.high(); HL++;
+        cycles = 8;
+    };
+    ops[0x23] = [this]() { // INC HL
+        HL++;
+        cycles = 8;
+    };
+    ops[0x24] = [this]() { // INC H
+        HL.set_high(inc8(HL.high()));
+        cycles = 4;
+    };
+    ops[0x25] = [this]() { // DEC H
+        HL.set_high(dec8(HL.high()));
+        cycles = 4;
+    };
+    ops[0x26] = [this]() { // LD H,n
+        HL.set_high(mem[++PC]);
+        cycles = 8;
+    };
+    ops[0x27] = [this]() { // DAA
+        // TODO: Implement DAA
+        cycles = 4;
+    };
+    ops[0x28] = [this]() { // JR Z,n
+        if(AF.low() & FLAG_Z) {
+            PC = PC + mem[++PC];
+            cycles = 12;
+        } else {
+            PC++;
+            cycles = 8;
         }
-        return;
-    }
+    };
+    ops[0x29] = [this]() { // ADD HL,HL
+        add16_hl(HL);
+        cycles = 8;
+    };
+    ops[0x2a] = [this]() { // LD A,(HL+)
+        AF.set_high(mem[HL]); HL++;
+        cycles = 8;
+    };
+    ops[0x2b] = [this]() { // DEC HL
+        HL--;
+        cycles = 8;
+    };
+    ops[0x2c] = [this]() { // INC L
+        HL.set_low(inc8(HL.low()));
+        cycles = 4;
+    };
+    ops[0x2d] = [this]() { // DEC L
+        HL.set_low(dec8(HL.low()));
+        cycles = 4;
+    };
+    ops[0x2e] = [this]() { // LD L,n
+        HL.set_low(mem[++PC]);
+        cycles = 8;
+    };
+    ops[0x2f] = [this]() { // CPL
+        AF.set_high(~AF.high());
+        AF.set_low(AF.low() | FLAG_N | FLAG_H);
+        cycles = 4;
+    };
+    ops[0x30] = [this]() { // JR NC,n
+        if(!(AF.low() & FLAG_C)) {
+            PC = PC + mem[++PC];
+            cycles = 12;
+        } else {
+            PC++;
+            cycles = 8;
+        }
+    };
+    ops[0x31] = [this]() { // LD SP,nn
+        load16_imm(SP);
+        cycles = 12;
+    };
+    ops[0x32] = [this]() { // LD (HL-),A
+        mem[HL] = AF.high(); HL--;
+        cycles = 8;
+    };
+    ops[0x33] = [this]() { // INC SP
+        SP++;
+        cycles = 8;
+    };
+    ops[0x34] = [this]() { // INC (HL)
+        mem[HL] = inc8(mem[HL]);
+        cycles = 12;
+    };
+    ops[0x35] = [this]() { // DEC (HL) 
+        mem[HL] = dec8(mem[HL]);
+        cycles = 12;
+    };
+    ops[0x36] = [this]() { // LD (HL),n
+        mem[HL] = mem[++PC];
+        cycles = 12;
+    };
+    ops[0x37] = [this]() { // SCF
+        AF.set_low(AF.low() | FLAG_C);
+        AF.set_low(AF.low() & ~(FLAG_N | FLAG_H));
+        cycles = 4;
+    };
+    ops[0x38] = [this]() { // JR C,n
+        if(AF.low() & FLAG_C) {
+            PC = PC + mem[++PC];
+            cycles = 12;
+        } else {
+            PC++;
+            cycles = 8;
+        }
+    };
+    ops[0x39] = [this]() { // ADD HL,SP
+        add16_hl(SP);
+        cycles = 8;
+    };
+    ops[0x3a] = [this]() { // LD A,(HL-)
+        AF.set_high(mem[HL]); HL--;
+        cycles = 8;
+    };
+    ops[0x3b] = [this]() { // DEC SP
+        SP--;
+        cycles = 8;
+    };
+    ops[0x3c] = [this]() { // INC A
+        AF.set_high(inc8(AF.high()));
+        cycles = 4;
+    };
+    ops[0x3d] = [this]() { // DEC A
+        AF.set_high(dec8(AF.high()));
+        cycles = 4;
+    };
+    ops[0x3e] = [this]() { // LD A,n
+        AF.set_high(mem[++PC]);
+        cycles = 8;
+    };
+    ops[0x3f] = [this]() { // CCF
+        AF.set_low(AF.low() & FLAG_C ? AF.low() & ~FLAG_C : 
+                                       AF.low() |  FLAG_C);
+        AF.set_low(AF.low() & ~(FLAG_N | FLAG_H));
+        cycles = 4;
+    };
+    ops[0x40] = [this]() { // LD B,B
+        BC.set_high(BC.high());
+        cycles = 4;
+    };
+    ops[0x41] = [this]() { // LD B,C
+        BC.set_high(BC.low());
+        cycles = 4;
+    };
+    ops[0x42] = [this]() { // LD B,D
+        BC.set_high(DE.high());
+        cycles = 4;
+    };
+    ops[0x43] = [this]() { // LD B,E
+        BC.set_high(DE.low());
+        cycles = 4;
+    };
+    ops[0x44] = [this]() { // LD B,H
+        BC.set_high(HL.high());
+        cycles = 4;
+    };
+    ops[0x45] = [this]() { // LD B,L
+        BC.set_high(HL.low());
+        cycles = 4;
+    };
+    ops[0x46] = [this]() { // LD B,(HL)
+        BC.set_high(mem[HL]);
+        cycles = 8;
+    };
+    ops[0x47] = [this]() { // LD B,A
+        BC.set_high(AF.high());
+        cycles = 4;
+    };
+    ops[0x48] = [this]() { // LD C,B
+        BC.set_low(BC.high());
+        cycles = 4;
+    };
+    ops[0x49] = [this]() { // LD C,C
+        BC.set_low(BC.low());
+        cycles = 4;
+    };
+    ops[0x4a] = [this]() { // LD C,D
+        BC.set_low(DE.high());
+        cycles = 4;
+    };
+    ops[0x4b] = [this]() { // LD C,E
+        BC.set_low(DE.low());
+        cycles = 4;
+    };
+    ops[0x4c] = [this]() { // LD C,H
+        BC.set_low(HL.high());
+        cycles = 4;
+    };
+    ops[0x4d] = [this]() { // LD C,L
+        BC.set_low(HL.low());
+        cycles = 4;
+    };
+    ops[0x4e] = [this]() { // LD C,(HL)
+        BC.set_low(mem[HL]);
+        cycles = 8;
+    };
+    ops[0x4f] = [this]() { // LD C,A
+        BC.set_low(AF.high());
+        cycles = 4;
+    };
+    ops[0x50] = [this]() { // LD D,B
+        DE.set_high(BC.high());
+        cycles = 4;
+    };
+    ops[0x51] = [this]() { // LD D,C
+        DE.set_high(BC.low());
+        cycles = 4;
+    };
+    ops[0x52] = [this]() { // LD D,D
+        DE.set_high(DE.high());
+        cycles = 4;
+    };
+    ops[0x53] = [this]() { // LD D,E
+        DE.set_high(DE.low());
+        cycles = 4;
+    };
+    ops[0x54] = [this]() { // LD D,H
+        DE.set_high(HL.high());
+        cycles = 4;
+    };
+    ops[0x55] = [this]() { // LD D,L
+        DE.set_high(HL.low());
+        cycles = 4;
+    };
+    ops[0x56] = [this]() { // LD D,(HL)
+        DE.set_high(mem[HL]);
+        cycles = 8;
+    };
+    ops[0x57] = [this]() { // LD D,A
+        DE.set_high(AF.high());
+        cycles = 4;
+    };
+    ops[0x58] = [this]() { // LD E,B
+        DE.set_low(BC.high());
+        cycles = 4;
+    };
+    ops[0x59] = [this]() { // LD E,C
+        DE.set_low(BC.low());
+        cycles = 4;
+    };
+    ops[0x5a] = [this]() { // LD E,D
+        DE.set_low(DE.high());
+        cycles = 4;
+    };
+    ops[0x5b] = [this]() { // LD E,E
+        DE.set_low(DE.low());
+        cycles = 4;
+    };
+    ops[0x5c] = [this]() { // LD E,H
+        DE.set_low(HL.high());
+        cycles = 4;
+    };
+    ops[0x5d] = [this]() { // LD E,L
+        DE.set_low(HL.low());
+        cycles = 4;
+    };
+    ops[0x5e] = [this]() { // LD E,(HL)
+        DE.set_low(mem[HL]);
+        cycles = 8;
+    };
+    ops[0x5f] = [this]() { // LD E,A
+        DE.set_low(AF.high());
+        cycles = 4;
+    };
+    ops[0x60] = [this]() { // LD H,B
+        HL.set_high(BC.high());
+        cycles = 4;
+    };
+    ops[0x61] = [this]() { // LD H,C
+        HL.set_high(BC.low());
+        cycles = 4;
+    };
+    ops[0x62] = [this]() { // LD H,D
+        HL.set_high(DE.high());
+        cycles = 4;
+    };
+    ops[0x63] = [this]() { // LD H,E
+        HL.set_high(DE.low());
+        cycles = 4;
+    };
+    ops[0x64] = [this]() { // LD H,H
+        HL.set_high(HL.high());
+        cycles = 4;
+    };
+    ops[0x65] = [this]() { // LD H,L
+        HL.set_high(HL.low());
+        cycles = 4;
+    };
+    ops[0x66] = [this]() { // LD H,(HL)
+        HL.set_high(mem[HL]);
+        cycles = 8;
+    };
+    ops[0x67] = [this]() { // LD H,A
+        HL.set_high(AF.high());
+        cycles = 4;
+    };
+    ops[0x68] = [this]() { // LD L,B
+        HL.set_low(BC.high());
+        cycles = 4;
+    };
+    ops[0x69] = [this]() { // LD L,C
+        HL.set_low(BC.low());
+        cycles = 4;
+    };
+    ops[0x6a] = [this]() { // LD L,D
+        HL.set_low(DE.high());
+        cycles = 4;
+    };
+    ops[0x6b] = [this]() { // LD L,E
+        HL.set_low(DE.low());
+        cycles = 4;
+    };
+    ops[0x6c] = [this]() { // LD L,H
+        HL.set_low(HL.high());
+        cycles = 4;
+    };
+    ops[0x6d] = [this]() { // LD L,L
+        HL.set_low(HL.low());
+        cycles = 4;
+    };
+    ops[0x6e] = [this]() { // LD L,(HL)
+        HL.set_low(mem[HL]);
+        cycles = 8;
+    };
+    ops[0x6f] = [this]() { // LD L,A
+        HL.set_low(AF.high());
+        cycles = 4;
+    };
+    ops[0x70] = [this]() { // LD (HL),B
+        mem[HL] = BC.high();
+        cycles = 8;
+    };
+    ops[0x71] = [this]() { // LD (HL),C
+        mem[HL] = BC.low();
+        cycles = 8;
+    };
+    ops[0x72] = [this]() { // LD (HL),D
+        mem[HL] = DE.high();
+        cycles = 8;
+    };
+    ops[0x73] = [this]() { // LD (HL),E
+        mem[HL] = DE.low();
+        cycles = 8;
+    };
+    ops[0x74] = [this]() { // LD (HL),H
+        mem[HL] = HL.high();
+        cycles = 8;
+    };
+    ops[0x75] = [this]() { // LD (HL),L
+        mem[HL] = HL.low();
+        cycles = 8;
+    };
+    ops[0x76] = [this]() { // HALT
+        while(true); // TODO: Implement HALT
+        cycles = 4;
+    };
+    ops[0x77] = [this]() { // LD (HL),A
+        mem[HL] = AF.high();
+        cycles = 8;
+    };
+    ops[0x78] = [this]() { // LD A,B
+        AF.set_high(BC.high());
+        cycles = 4;
+    };
+    ops[0x79] = [this]() { // LD A,C
+        AF.set_high(BC.low());
+        cycles = 4;
+    };
+    ops[0x7a] = [this]() { // LD A,D
+        AF.set_high(DE.high());
+        cycles = 4;
+    };
+    ops[0x7b] = [this]() { // LD A,E
+        AF.set_high(DE.low());
+        cycles = 4;
+    };
+    ops[0x7c] = [this]() { // LD A,H
+        AF.set_high(HL.high());
+        cycles = 4;
+    };
+    ops[0x7d] = [this]() { // LD A,L
+        AF.set_high(HL.low());
+        cycles = 4;
+    };
+    ops[0x7e] = [this]() { // LD A,(HL)
+        AF.set_high(mem[HL]);
+        cycles = 8;
+    };
+    ops[0x7f] = [this]() { // LD A,A
+        AF.set_high(AF.high());
+        cycles = 4;
+    };
+    return ops;
+} // build_op_table()
 
-    switch(x) {
-        case 0x0:
-            switch(z) {
-                case 0x0: 
-                    switch(y) {
-                        case 0x0: // NOP
-                            pc++;
-                            break;
-                        case 0x1: // LD (nn),SP
-                            mem[BIT16_FROM_MEM(pc+1)] = sp & 0x00ff;
-                            mem[BIT16_FROM_MEM(pc+1)+1] = (sp & 0xff00)>>8;
-                            pc += 3;
-                            break;
-                        case 0x2: // TODO: STOP
-                            while(true);
-                            pc++;
-                            break;
-                        case 0x3: // Jump relative
-                            jr(mem[pc+1]);
-                            break;
-                        case 0x4:
-                        case 0x5:
-                        case 0x6:
-                        case 0x7: // Jump relative conditional
-                            if(CC_TEST(cc,y-4,F))
-                                jr(mem[pc+1]);
-                            else
-                                pc += 2;
-                            break;
-                    }
-                    break;
-                case 0x1:
-                    if(q == 0x0) { // 16bit load imm 
-                        uint16_t imm = BIT16_FROM_MEM(pc+1);
-                        if(rp[p] == REG_SP) 
-                            sp = imm;
-                        else 
-                            reg16(rp[p]) = imm;
-                        pc += 3;
-                    } else { // Add reg16 to HL
-                        if(rp[p] == REG_SP) 
-                            add16_hl(sp);
-                        else 
-                            add16_hl(reg16(rp[p]));
-                        pc++;
-                    }
-                    break;
-                case 0x2: // Indirect loading
-                    if(q == 0x0) {
-                        switch(p) {
-                            case 0x0:
-                                mem[reg16(REG_BC)] = reg8[REG_A];
-                                pc++;
-                                break;
-                            case 0x1:
-                                mem[reg16(REG_BC)] = reg8[REG_A];
-                                pc++;
-                                break;
-                            case 0x2: // LDI (HL),A
-                                mem[reg16(REG_HL)] = reg8[REG_A];
-                                inc16(reg16(REG_HL));
-                                pc++;
-                                break;
-                            case 0x3: // LDD (HL),A
-                                mem[reg16(REG_HL)] = reg8[REG_A];
-                                dec16(reg16(REG_HL));
-                                pc++;
-                                break;
-                        }
-                    } else {
-                        switch(p) {
-                            case 0x0:
-                                reg8[REG_A] = mem[reg16(REG_BC)];
-                                pc++;
-                                break;
-                            case 0x1:
-                                reg8[REG_A] = mem[reg16(REG_DE)];
-                                pc++;
-                                break;
-                            case 0x2: // LDI A,(HL)
-                                reg8[REG_A] = mem[reg16(REG_HL)];
-                                inc16(reg16(REG_HL));
-                                pc++;
-                                break;
-                            case 0x3: // LDD A,(HL)
-                                reg8[REG_A] = mem[reg16(REG_HL)];
-                                dec16(reg16(REG_HL));
-                                pc++;
-                                break;
-                        }
-                    }
-                    break;
-                case 0x3: 
-                    if(q == 0x0) { // 16bit inc
-                        if(rp[p] == REG_SP)
-                            inc16(sp);
-                        else 
-                            inc16(reg16(rp[p]));
-                    } else { // 16bit dec
-                        if(rp[p] == REG_SP)
-                            dec16(sp);
-                        else 
-                            dec16(reg16(rp[p]));
-                    }
-                    pc++;
-                    break;
-                case 0x4: // 8bit inc
-                    if(r[y] == MEM_HL) 
-                        inc8(mem[reg16(REG_HL)]);
-                    else 
-                        inc8(reg8[r[y]]);
-                    pc++;
-                    break;
-                case 0x5: // 8bit dec 
-                    if(r[y] == MEM_HL) 
-                        dec8(mem[reg16(REG_HL)]);
-                    else 
-                        dec8(reg8[r[y]]);
-                    pc++;
-                    break;
-                case 0x6: // 8bit load imm
-                    if(r[y] == MEM_HL) 
-                        mem[reg16(REG_HL)] = mem[pc+1];
-                    else 
-                        reg8[r[y]] = mem[pc+1];
-                    pc += 2;
-                    break;
-                case 0x7: 
-                    switch(y) {
-                        case 0x0: // Rotate A left to carry
-                            rlc8(reg8[REG_A]);
-                            pc++;
-                            break;
-                        case 0x1: // Rotate A right to carry
-                            rrc8(reg8[REG_A]);
-                            pc++;
-                            break;
-                        case 0x2: // Rotate A left through carry
-                            rl8(reg8[REG_A]) ;
-                            pc++;
-                            break;
-                        case 0x3: // Rotate A right through carry
-                            rr8(reg8[REG_A]);
-                            pc++;
-                            break;
-                        case 0x4: // TODO: DAA
-                            pc++;
-                            break;
-                        case 0x5: // Complement A
-                            cpl();
-                            pc++;
-                            break;
-                        case 0x6: // Set carry flag
-                            scf();
-                            pc++;
-                            break;
-                        case 0x7: // Complement carry flag
-                            ccf();
-                            pc++;
-                            break;
-                    }
-            }
-            break;
-        case 0x1: 
-            if(z == 0x6 && y == 0x6) {
-                // TODO: HALT TEMP
-                while(true);
-            }
-            // 8bit load of reg/mem
-            if(r[y] == MEM_HL) 
-                mem[reg16(REG_HL)] = reg8[r[z]];
-            else if(r[z] == MEM_HL)
-                reg8[r[y]] = mem[reg16(REG_HL)];
-            else 
-                reg8[r[y]] = reg8[r[z]];
-            pc++;
-            break;
-        case 0x2:
-            // ALU operation on reg/mem
-            if(r[z] == MEM_HL) 
-                (this->*alu[y])(mem[reg16(REG_HL)]);
-            else 
-                (this->*alu[y])(reg8[r[z]]);
-            pc++;
-            break;
-        case 0x3:
-            switch(z) {
-                case 0x0: 
-                    switch(y) {
-                        case 0x0: // Conditional return
-                            if(CC_TEST(cc,y,F))
-                                ret();
-                            else 
-                                pc++;
-                            break;
-                        case 0x4: 
-                            mem[0xff00 + mem[pc+1]] = reg8[REG_A];
-                            pc += 2;
-                            break;
-                        case 0x5: 
-                            add16_sp(mem[pc+1]);
-                            pc += 2;
-                            break;
-                        case 0x6:
-                            reg8[REG_A] = mem[0xff00 + mem[pc+1]];
-                            pc += 2;
-                            break;
-                        case 0x7: // LD HL,SP+n
-                            reg16(REG_HL) = sp + mem[pc+1];
-                            pc += 2;
-                            break;
-                    }
-                    break;
-                case 0x1: 
-                    if(q == 0x0) { // Pop
-                        pop(reg16(rp2[p]));
-                        pc++;
-                    } else {
-                        switch(p) {
-                            case 0x0: 
-                                ret();
-                                break;
-                            case 0x1:
-                                ret();
-                                interrupts = true;
-                                break;
-                            case 0x2:
-                                jp(reg16(REG_HL));
-                                break;
-                            case 0x3:
-                                sp = reg16(REG_HL);
-                                pc++;
-                                break;
-                        }
-                    }
-                    break;
-                case 0x2: 
-                    switch(y) {
-                        case 0x0:
-                        case 0x1:
-                        case 0x2:
-                        case 0x3:
-                            // Conditional jump
-                            if(CC_TEST(cc,y,F))
-                                jp(BIT16_FROM_MEM(pc+1));
-                            else 
-                                pc += 3;
-                            break;
-                        case 0x4:
-                            mem[0xff00 + reg8[REG_C]] = reg8[REG_A];
-                            pc++;
-                            break;
-                        case 0x6:
-                            reg8[REG_A] = mem[0xff00 + reg8[REG_C]];
-                            pc++;
-                            break;
-                    }
-                    break;
-                case 0x3: 
-                    switch(y) {
-                        case 0x0: // Jump
-                            jp(BIT16_FROM_MEM(pc+1));
-                            break;
-                        case 0x6: 
-                            interrupts = false;
-                            pc++;
-                            break;
-                        case 0x7:
-                            interrupts = true;
-                            pc++;
-                            break;
-                    }
-                    break;
-                case 0x4: // Conditional call
-                    if(CC_TEST(cc,y,F)) 
-                        call(BIT16_FROM_MEM(pc+1));
-                    else 
-                        pc += 3;
-                    break;
-                case 0x5: 
-                    if(q == 0x0) { // Push
-                        push(reg16(rp2[p]));
-                        pc++;
-                    } else {  // Call
-                        call(BIT16_FROM_MEM(pc+1));
-                    }
-                    break;
-                case 0x6: // ALU op with imm
-                    (this->*alu[y])(mem[pc+1]);
-                    pc += 2;
-                    break;
-                case 0x7: // Restart
-                    push(pc + 3);
-                    jp(y*8);
-                    break;
-            }
-            break;
-    }
-} // fetch_decode_execute()
+void CPU::load16_imm(Register &r)
+{
+    r.set_low(mem[++PC]);
+    r.set_high(mem[++PC]);
+} // load16_imm()
+
+void CPU::add16_hl(Register& r)
+{
+    uint16_t HL_old = HL;
+    HL = HL + r;
+    uint8_t flags = AF.low();
+    flags &= ~FLAG_N;
+    if(BIT(HL_old, 11) && BIT(r, 11)) 
+        flags |= FLAG_H;
+    if(BIT(HL_old, 15) && BIT(r, 15)) 
+        flags |= FLAG_C;
+    AF.set_low(flags);
+} // add16_hl()
+
+uint8_t CPU::inc8(uint8_t val)
+{
+    val++;
+
+    uint8_t flags = AF.low();
+    if(val == 0) 
+        flags |= FLAG_Z;
+    flags &= ~FLAG_N;
+    if(~BIT(val - 1, 4) && BIT(val, 4))
+        flags |= FLAG_H;
+    AF.set_low(flags);
+
+    return val;
+} // inc8()
+
+uint8_t CPU::dec8(uint8_t val) 
+{
+    val--;
+
+    uint8_t flags = AF.low();
+    if(val == 0) 
+        flags |= FLAG_Z;
+    flags |= FLAG_N;
+    if(~BIT(val - 1, 4) && BIT(val, 4))
+        flags |= FLAG_H;
+    AF.set_low(flags);
+
+    return val;
+} // dec8()
+
+uint8_t CPU::rlc8(uint8_t val)
+{
+    uint8_t msb = BIT(val, 7);
+    val = (val << 1) + (msb >> 7);
+    uint8_t flags = AF.low();
+    if(val == 0) 
+        flags |= FLAG_Z;
+    flags &= ~(FLAG_N | FLAG_H);
+    msb ? flags |= FLAG_C : flags &= ~FLAG_C;
+    AF.set_low(flags);
+
+    return val;
+} // rlc8()
+
+uint8_t CPU::rrc8(uint8_t val)
+{
+    uint8_t lsb = BIT(val, 0);
+    val = (val >> 1) + (lsb << 7);
+    uint8_t flags = AF.low();
+    if(val == 0) 
+         flags|= FLAG_Z;
+    flags &= ~(FLAG_N | FLAG_H);
+    lsb ? flags |= FLAG_C : flags &= ~FLAG_C;
+
+    return val;
+} // rrc8()
+
+uint8_t CPU::rl8(uint8_t val)
+{
+    uint8_t msb = BIT(val, 7);
+    uint8_t flags = AF.low();
+    val = (val << 1) + (flags  & FLAG_C ? 0x1 : 0x0);
+    if(val == 0) 
+        flags |= FLAG_Z;
+    flags &= ~(FLAG_N | FLAG_H);
+    msb ? flags |= FLAG_C : flags &= ~FLAG_C;
+    
+    return val;
+} // rl8()
+
+uint8_t CPU::rr8(uint8_t val)
+{
+    uint8_t lsb = BIT(val, 0);
+    uint8_t flags = AF.low();
+    val = (val >> 1) + (flags & FLAG_C ? 0x80 : 0x0);
+    if(val == 0) 
+        flags |= FLAG_Z;
+    flags &= ~(FLAG_N | FLAG_H);
+    lsb ? flags |= FLAG_C : flags &= ~FLAG_C;
+
+    return val;
+} // rr8()
+
+/*
 
 void CPU::add8(uint8_t n) 
 {
@@ -548,43 +782,6 @@ void CPU::cp8(uint8_t n)
     reg8[REG_A] = A; 
 } // cp8()
 
-void CPU::inc8(uint8_t &n)
-{
-    n++;
-
-    Reg8 &F = reg8[REG_F];
-    if(n == 0) 
-        F |= FLAG_Z;
-    F &= ~FLAG_N;
-    if(~BIT(n - 1, 4) && BIT(n, 4))
-        F |= FLAG_H;
-} // inc8()
-
-void CPU::dec8(uint8_t &n)
-{
-    n--;
-
-    Reg8 &F = reg8[REG_F];
-    if(n == 0) 
-        F |= FLAG_Z;
-    F |= FLAG_N;
-    if(~BIT(n - 1, 4) && BIT(n, 4))
-        F |= FLAG_H;
-} // dec8()
-
-void CPU::add16_hl(Reg16 r)
-{
-    Reg16 &HL = reg16(REG_HL), HL_old = reg16(REG_HL);
-    HL += r;
-
-    Reg8 &F = reg8[REG_F];
-    F &= ~FLAG_N;
-    if(BIT(HL_old, 11) && BIT(r, 11)) 
-        F |= FLAG_H;
-    if(BIT(HL_old, 15) && BIT(r, 15)) 
-        F |= FLAG_C;
-} // add16_hl()
-
 void CPU::add16_sp(uint8_t n)
 {
     sp += n;
@@ -654,38 +851,9 @@ void CPU::rlc8(uint8_t &n)
     msb ? F |= FLAG_C : F &= ~FLAG_C;
 } // rlc8()
 
-void CPU::rl8(uint8_t &n)
-{
-    uint8_t msb = BIT(n, 7);
-    Reg8 &F = reg8[REG_F];
-    n = (n << 1) + (F & FLAG_C ? 0x1 : 0x0);
-    if(n == 0) 
-        F |= FLAG_Z;
-    F &= ~(FLAG_N | FLAG_H);
-    msb ? F |= FLAG_C : F &= ~FLAG_C;
-} // rl8()
 
-void CPU::rrc8(uint8_t &n)
-{
-    uint8_t lsb = BIT(n, 0);
-    n = (n >> 1) + (lsb << 7);
-    Reg8 &F = reg8[REG_F];
-    if(n == 0) 
-        F |= FLAG_Z;
-    F &= ~(FLAG_N | FLAG_H);
-    lsb ? F |= FLAG_C : F &= ~FLAG_C;
-} // rrc8()
 
-void CPU::rr8(uint8_t &n)
-{
-    uint8_t lsb = BIT(n, 0);
-    Reg8 &F = reg8[REG_F];
-    n = (n >> 1) + (F & FLAG_C ? 0x80 : 0x0);
-    if(n == 0) 
-        F |= FLAG_Z;
-    F &= ~(FLAG_N | FLAG_H);
-    lsb ? F |= FLAG_C : F &= ~FLAG_C;
-} // rr8()
+
 
 void CPU::sla8(uint8_t &n)
 {
@@ -725,11 +893,6 @@ void CPU::jp(uint16_t addr)
     pc = addr;
 } // jp()
 
-void CPU::jr(uint8_t offset)
-{
-    pc += offset;
-} // jr()
-
 void CPU::push(Reg16 r)
 {
     sp--;
@@ -758,3 +921,4 @@ void CPU::ret()
     pop(addr);
     jp(addr);
 } // ret()
+*/
