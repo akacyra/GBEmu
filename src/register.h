@@ -1,3 +1,6 @@
+#ifndef GUARD_REGISTER_H
+#define GUARD_REGISTER_H
+
 #include <stdint.h>
 #include <iostream>
 #include <iomanip>
@@ -47,3 +50,5 @@ class Register
         uint8_t h, l;
         uint16_t hl;
 };
+
+#endif

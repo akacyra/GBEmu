@@ -1,3 +1,6 @@
+#ifndef GUARD_MEMORY_H
+#define GUARD_MEMORY_H
+
 #include <iostream> 
 #include <vector>
 #include <stdint.h>
@@ -33,3 +36,5 @@ class Memory
     private:
         std::vector<uint8_t> mem;
 };
+
+#endif

@@ -21,6 +21,8 @@ class CPU {
     public:
         CPU();
 
+        void run();
+
         void print_registers() const;
 
     private:
@@ -49,6 +51,14 @@ class CPU {
 
         void load16_imm(Register&);
         void add16_hl(Register&);
+        void add8(uint8_t);
+        void addc8(uint8_t);
+        void sub8(uint8_t);
+        void subc8(uint8_t);
+        void and8(uint8_t);
+        void or8(uint8_t);
+        void xor8(uint8_t);
+        void cp8(uint8_t); 
         uint8_t inc8(uint8_t);
         uint8_t dec8(uint8_t);
         uint8_t rlc8(uint8_t);
@@ -56,20 +66,19 @@ class CPU {
         uint8_t rl8(uint8_t);
         uint8_t rr8(uint8_t);
 
+        void push(uint16_t);
+        void pop(uint16_t&);
+        void call(uint16_t);
+        void ret();
+
         /*
         void load16_imm();
 
         // For these ops, n is a reg, imm, or mem val. 
         // Result stored in A.
-        void add8(uint8_t n);
-        void addc8(uint8_t n);
-        void sub8(uint8_t n);
-        void subc8(uint8_t n);
-        void and8(uint8_t n);
-        void or8(uint8_t n);
-        void xor8(uint8_t n);
-        // Compare A with n.
-        void cp8(uint8_t n); 
+
+
+
         // n is a reg or mem val.
         void inc8(uint8_t &n);
         void dec8(uint8_t &n);
@@ -105,10 +114,7 @@ class CPU {
         void jr(uint8_t offset);
 
         // Stack operations.
-        void push(Reg16 r);
-        void pop(Reg16 &r);
-        void call(uint16_t addr);
-        void ret();
+
         */
 };
 
