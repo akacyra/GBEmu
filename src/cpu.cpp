@@ -181,7 +181,7 @@ const vector<CPU::Instruction> CPU::build_op_table()
         cycles = 4;
     };
     ops[0x20] = [this]() { // JR NZ,n
-        if(!(AF.low() & FLAG_Z)) {
+        if(!(get_flags() & FLAG_Z)) {
             PC = PC + mem[PC+1];
             cycles = 12;
         } else {
@@ -214,11 +214,11 @@ const vector<CPU::Instruction> CPU::build_op_table()
         cycles = 8;
     };
     ops[0x27] = [this]() { // DAA
-        // TODO: Implement DAA
+		daa();
         cycles = 4;
     };
     ops[0x28] = [this]() { // JR Z,n
-        if(AF.low() & FLAG_Z) {
+        if(get_flags() & FLAG_Z) {
             PC = PC + mem[PC+1];
             cycles = 12;
         } else {
@@ -252,11 +252,11 @@ const vector<CPU::Instruction> CPU::build_op_table()
     };
     ops[0x2f] = [this]() { // CPL
         AF.set_high(~AF.high());
-        AF.set_low(AF.low() | FLAG_N | FLAG_H);
+        set_flags(get_flags() | FLAG_N | FLAG_H);
         cycles = 4;
     };
     ops[0x30] = [this]() { // JR NC,n
-        if(!(AF.low() & FLAG_C)) {
+        if(!(get_flags() & FLAG_C)) {
             PC = PC + mem[PC+1];
             cycles = 12;
         } else {
@@ -289,12 +289,12 @@ const vector<CPU::Instruction> CPU::build_op_table()
         cycles = 12;
     };
     ops[0x37] = [this]() { // SCF
-        AF.set_low(AF.low() | FLAG_C);
-        AF.set_low(AF.low() & ~(FLAG_N | FLAG_H));
+        set_flags(get_flags() | FLAG_C);
+        set_flags(get_flags() & ~(FLAG_N | FLAG_H));
         cycles = 4;
     };
     ops[0x38] = [this]() { // JR C,n
-        if(AF.low() & FLAG_C) {
+        if(get_flags() & FLAG_C) {
             PC = PC + mem[PC+1];
             cycles = 12;
         } else {
@@ -327,9 +327,9 @@ const vector<CPU::Instruction> CPU::build_op_table()
         cycles = 8;
     };
     ops[0x3f] = [this]() { // CCF
-        AF.set_low(AF.low() & FLAG_C ? AF.low() & ~FLAG_C : 
-                                       AF.low() |  FLAG_C);
-        AF.set_low(AF.low() & ~(FLAG_N | FLAG_H));
+        set_flags(get_flags() & FLAG_C ? get_flags() & ~FLAG_C : 
+                                       get_flags() |  FLAG_C);
+        set_flags(get_flags() & ~(FLAG_N | FLAG_H));
         cycles = 4;
     };
     ops[0x40] = [this]() { // LD B,B
@@ -845,7 +845,7 @@ const vector<CPU::Instruction> CPU::build_op_table()
         cycles = 4;
     };
     ops[0xc0] = [this]() { // RET NX
-        if(!(AF.low() & FLAG_Z)) {
+        if(!(get_flags() & FLAG_Z)) {
             ret();
             cycles = 20;
         } else 
@@ -858,7 +858,7 @@ const vector<CPU::Instruction> CPU::build_op_table()
         cycles = 12;
     };
     ops[0xc2] = [this]() { // JP NZ,nn
-        if(!(AF.low() & FLAG_Z)) {
+        if(!(get_flags() & FLAG_Z)) {
             PC = mem.get16(PC+1); 
             cycles = 16;
         } else {
@@ -871,7 +871,7 @@ const vector<CPU::Instruction> CPU::build_op_table()
         cycles = 16;
     };
     ops[0xc4] = [this]() { // CALL NZ,nn
-        if(!(AF.low() & FLAG_Z)) {
+        if(!(get_flags() & FLAG_Z)) {
             call(mem.get16(PC+1)); 
             cycles = 24;
         } else {
@@ -892,7 +892,7 @@ const vector<CPU::Instruction> CPU::build_op_table()
         cycles = 16;
     };
     ops[0xc8] = [this]() { // RET Z
-        if(AF.low() & FLAG_Z) {
+        if(get_flags() & FLAG_Z) {
             ret();
             cycles = 20;
         } else 
@@ -903,7 +903,7 @@ const vector<CPU::Instruction> CPU::build_op_table()
         cycles = 16;
     };
     ops[0xca] = [this]() { // JP Z,nn
-        if(AF.low() & FLAG_Z) {
+        if(get_flags() & FLAG_Z) {
             PC = mem.get16(PC+1); 
             cycles = 16;
         } else {
@@ -912,10 +912,10 @@ const vector<CPU::Instruction> CPU::build_op_table()
         }
     };
     ops[0xcb] = [this]() { // PREFIX CB
-        // TODO: Handle CB-prefixed instructions.
+        handle_cb_op();
     };
     ops[0xcc] = [this]() { // CALL Z,nn
-        if(AF.low() & FLAG_Z) {
+        if(get_flags() & FLAG_Z) {
             call(mem.get16(PC+1)); 
             cycles = 24;
         } else {
@@ -935,11 +935,253 @@ const vector<CPU::Instruction> CPU::build_op_table()
         call(0x08);
         cycles = 16;
     };
-
-
+    ops[0xd0] = [this]() { // RET NC
+        if(!(get_flags() & FLAG_C)) {
+            ret();
+            cycles = 20;
+        } else 
+            cycles = 8;
+    };
+    ops[0xd1] = [this]() { // POP DE
+        uint16_t val;
+        pop(val);
+        DE = val;
+        cycles = 12;
+    };
+    ops[0xd2] = [this]() { // JP NC,nn
+        if(!(get_flags() & FLAG_C)) {
+            PC = mem.get16(PC+1); 
+            cycles = 16;
+        } else {
+            PC = PC + 2;
+            cycles = 12;
+        }
+    };
+    ops[0xd4] = [this]() { // CALL NC,nn
+        if(!(get_flags() & FLAG_C)) {
+            call(mem.get16(PC+1)); 
+            cycles = 24;
+        } else {
+            PC = PC + 2;
+            cycles = 12;
+        }
+    };
+    ops[0xd5] = [this]() { // PUSH DE
+        push(DE);
+        cycles = 16;
+    };
+    ops[0xd6] = [this]() { // SUB A,n
+        sub8(mem[++PC]);
+        cycles = 8;
+    };
+    ops[0xd7] = [this]() { // RST 10H
+        call(0x10);
+        cycles = 16;
+    };
+    ops[0xd8] = [this]() { // RET C
+        if(get_flags() & FLAG_C) {
+            ret();
+            cycles = 20;
+        } else 
+            cycles = 8;
+    };
+    ops[0xd9] = [this]() { // RETI
+        ret();
+        interrupts = true;
+        cycles = 16;
+    };
+    ops[0xda] = [this]() { // JP C,nn
+        if(get_flags() & FLAG_C) {
+            PC = mem.get16(PC+1); 
+            cycles = 16;
+        } else {
+            PC = PC + 2;
+            cycles = 12;
+        }
+    };
+    ops[0xdc] = [this]() { // CALL C,nn
+        if(get_flags() & FLAG_C) {
+            call(mem.get16(PC+1)); 
+            cycles = 24;
+        } else {
+            PC = PC + 2;
+            cycles = 12;
+        }
+    };
+    ops[0xde] = [this]() { // SBC,n
+        subc8(mem[++PC]);
+        cycles = 8;
+    };
+    ops[0xdf] = [this]() { // RST 18H
+        call(0x18);
+        cycles = 16;
+    };
+    ops[0xe0] = [this]() { // LDH nn,A
+        mem[0xff00 + mem[++PC]] = AF.high();
+        cycles = 12;
+    };
+    ops[0xe1] = [this]() { // POP HL
+        uint16_t val;
+        pop(val);
+        HL = val;
+        cycles = 12;
+    };
+    ops[0xe2] = [this]() { // LD (C),A
+        mem[0xff00 + BC.low()] = AF.high();
+        cycles = 8;
+    };
+    ops[0xe5] = [this]() { // PUSH HL
+        push(HL);
+        cycles = 16;
+    };
+    ops[0xe6] = [this]() { // AND A,n
+        and8(mem[++PC]);
+        cycles = 8;
+    };
+    ops[0xe7] = [this]() { // RST 20H
+        call(0x20);
+        cycles = 16;
+    };
+    ops[0xe8] = [this]() { // ADD SP,n
+        add16_sp(mem[++PC]);
+        cycles = 16;
+    };
+    ops[0xe9] = [this]() { // JP (HL)
+        PC = HL;
+        cycles = 4;
+    };
+    ops[0xea] = [this]() { // LD (nn),A
+        mem[mem.get16(PC+1)] = AF.high();
+        PC = PC + 2;
+        cycles = 16;
+    };
+    ops[0xee] = [this]() { // XOR,n
+        xor8(mem[++PC]);
+        cycles = 8;
+    };
+    ops[0xef] = [this]() { // RST 28H
+        call(0x28);
+        cycles = 16;
+    };
+    ops[0xf0] = [this]() { // LDH A,nn
+        AF.set_high(mem[0xff00 + mem[++PC]]);
+        cycles = 12;
+    };
+    ops[0xf1] = [this]() { // POP AF
+        uint16_t val;
+        pop(val);
+        AF = val;
+        cycles = 12;
+    };
+    ops[0xf2] = [this]() { // LD A,(C)
+        AF.set_high(mem[0xff00 + BC.low()]);
+        cycles = 8;
+    };
+    ops[0xf3] = [this]() { // DI
+        interrupts = false;
+        cycles = 4;
+    };
+    ops[0xf5] = [this]() { // PUSH AF
+        push(AF);
+        cycles = 16;
+    };
+    ops[0xf6] = [this]() { // OR  A,n
+        or8(mem[++PC]);
+        cycles = 8;
+    };
+    ops[0xf7] = [this]() { // RST 30H
+        call(0x30);
+        cycles = 16;
+    };
+    ops[0xf8] = [this]() { // LD HL,SP+n
+        HL = SP + mem[++PC];
+        // TODO: Add flag handling, and handle signed n (?)
+        cycles = 12;
+    };
+    ops[0xf9] = [this]() { // LD SP,HL
+        SP = HL;
+        cycles = 8;
+    };
+    ops[0xfa] = [this]() { // LD A,(nn)
+        AF.set_high(mem[mem.get16(PC+1)]);
+        PC = PC + 2;
+        cycles = 16;
+    };
+    ops[0xfb] = [this]() { // EI
+        interrupts = true;
+    };
+    ops[0xfe] = [this]() { // CP,n
+        cp8(mem[++PC]);
+        cycles = 8;
+    };
+    ops[0xff] = [this]() { // RST 38H
+        call(0x38);
+        cycles = 16;
+    };
 
     return ops;
 } // build_op_table()
+
+void CPU::handle_cb_op()
+{
+    uint8_t op = mem[PC], reg_num = op & 0x07, val, flags;
+	uint8_t op_index = (op & 0x38) >> 3, bit_pos = op_index;
+	Register* reg;
+
+	typedef uint8_t (CPU::*RotOp)(uint8_t);
+	static const RotOp ops[8] = {
+		&CPU::rlc8, &CPU::rrc8, &CPU::rl8, &CPU::rr8,
+		&CPU::sla8, &CPU::sra8, &CPU::swap8, &CPU::srl8,
+	};
+
+	switch(reg_num) {
+		case 0x0: reg = &BC; break;
+		case 0x1: reg = &BC; break;
+		case 0x2: reg = &DE; break;
+		case 0x3: reg = &DE; break;
+		case 0x4: reg = &HL; break;
+		case 0x5: reg = &HL; break;
+		case 0x6: break;
+		case 0x7: reg = &AF; break;
+	};
+
+	if(reg_num == 0x6)
+		val = mem[HL];
+	else if(reg_num % 2 == 0 || reg_num == 0x7) 
+		val = reg->high();
+	else 
+		val = reg->low();
+
+    switch((op & 0xc0) >> 6) {
+		case 0x0: // Rotations/Swap
+			val = (this->*ops[op_index])(val);
+			break;
+		case 0x1: // BIT
+			flags = get_flags();
+			if(BIT(val, bit_pos))
+				flags &= ~FLAG_Z;
+			else 
+				flags |= FLAG_Z;
+			flags &= ~FLAG_N;
+			flags |= FLAG_H;
+			set_flags(flags);
+			break;
+		case 0x2: // SET
+			val |= 1 << bit_pos;
+			break;
+		case 0x3: // RESET
+			val &= ~(1 << bit_pos);
+			break;
+    };
+
+	if(reg_num == 0x6)
+		mem[HL] = val;
+	else if(reg_num % 2 == 0 || reg_num == 0x7) 
+		reg->set_high(val);
+	else 
+		reg->set_low(val);
+
+} // handle_cb_op()
 
 void CPU::load16_imm(Register &r)
 {
@@ -951,13 +1193,21 @@ void CPU::add16_hl(Register& r)
 {
     uint16_t HL_old = HL;
     HL = HL + r;
-    uint8_t flags = AF.low() & FLAG_Z;
+    uint8_t flags = get_flags() & FLAG_Z;
     if(BIT(HL_old, 11) && BIT(r, 11)) 
         flags |= FLAG_H;
     if(BIT(HL_old, 15) && BIT(r, 15)) 
         flags |= FLAG_C;
-    AF.set_low(flags);
+    set_flags(flags);
 } // add16_hl()
+
+void CPU::add16_sp(uint8_t val)
+{
+    SP = SP + val;
+    uint8_t flags = 0;
+    // TODO: Flags H and C???
+    set_flags(flags);
+} // add16_sp()
 
 void CPU::add8(uint8_t val) 
 {
@@ -969,12 +1219,12 @@ void CPU::add8(uint8_t val)
         flags |= FLAG_H;
     if(BIT(A_old, 7) && BIT(val, 7))
         flags |= FLAG_C;
-    AF.set_low(flags);
+    set_flags(flags);
 } // add8()
 
 void CPU::addc8(uint8_t val)
 {
-    uint8_t carry = (AF.low() & FLAG_C) ? 0x1 : 0x0;
+    uint8_t carry = (get_flags() & FLAG_C) ? 0x1 : 0x0;
     add8(val + carry);
 } // addc8()
 
@@ -989,12 +1239,12 @@ void CPU::sub8(uint8_t val)
         flags |= FLAG_H;
     if(A_old < val)
         flags |= FLAG_C;
-    AF.set_low(flags);
+    set_flags(flags);
 } // sub8()
 
 void CPU::subc8(uint8_t val)
 {
-    uint8_t carry = (AF.low() & FLAG_C) ? 0x1 : 0x0;
+    uint8_t carry = (get_flags() & FLAG_C) ? 0x1 : 0x0;
     sub8(val + carry);
 } // subc8()
 
@@ -1005,7 +1255,7 @@ void CPU::and8(uint8_t val)
     if(AF.high() == 0) 
         flags |= FLAG_Z;
     flags |= FLAG_H;
-    AF.set_low(flags);
+    set_flags(flags);
 } // and8()
 
 void CPU::or8(uint8_t val)
@@ -1014,7 +1264,7 @@ void CPU::or8(uint8_t val)
     uint8_t flags = 0;
     if(AF.high() == 0) 
         flags |= FLAG_Z;
-    AF.set_low(flags);
+    set_flags(flags);
 } // or8()
 
 void CPU::xor8(uint8_t val)
@@ -1023,7 +1273,7 @@ void CPU::xor8(uint8_t val)
     uint8_t flags = 0;
     if(AF.high() == 0) 
         flags |= FLAG_Z;
-    AF.set_low(flags);
+    set_flags(flags);
 } // xor8()
 
 void CPU::cp8(uint8_t val)
@@ -1037,25 +1287,25 @@ void CPU::cp8(uint8_t val)
 uint8_t CPU::inc8(uint8_t val)
 {
     val++;
-    uint8_t flags = AF.low() & FLAG_C;
+    uint8_t flags = get_flags() & FLAG_C;
     if(val == 0) 
         flags |= FLAG_Z;
     if(~BIT(val - 1, 4) && BIT(val, 4))
         flags |= FLAG_H;
-    AF.set_low(flags);
+    set_flags(flags);
     return val;
 } // inc8()
 
 uint8_t CPU::dec8(uint8_t val) 
 {
     val--;
-    uint8_t flags = AF.low() & FLAG_C;
+    uint8_t flags = get_flags() & FLAG_C;
     if(val == 0) 
         flags |= FLAG_Z;
     flags |= FLAG_N;
     if(~BIT(val - 1, 4) && BIT(val, 4))
         flags |= FLAG_H;
-    AF.set_low(flags);
+    set_flags(flags);
     return val;
 } // dec8()
 
@@ -1067,7 +1317,7 @@ uint8_t CPU::rlc8(uint8_t val)
     if(val == 0) 
         flags |= FLAG_Z;
     msb ? flags |= FLAG_C : flags &= ~FLAG_C;
-    AF.set_low(flags);
+    set_flags(flags);
     return val;
 } // rlc8()
 
@@ -1079,32 +1329,81 @@ uint8_t CPU::rrc8(uint8_t val)
     if(val == 0) 
          flags|= FLAG_Z;
     lsb ? flags |= FLAG_C : flags &= ~FLAG_C;
-
+    set_flags(flags);
     return val;
 } // rrc8()
 
 uint8_t CPU::rl8(uint8_t val)
 {
     uint8_t msb = BIT(val, 7);
-    val = (val << 1) + (AF.low() & FLAG_C ? 0x1 : 0x0);
+    val = (val << 1) + (get_flags() & FLAG_C ? 0x1 : 0x0);
     uint8_t flags = 0;
     if(val == 0) 
         flags |= FLAG_Z;
     msb ? flags |= FLAG_C : flags &= ~FLAG_C;
+    set_flags(flags);
     return val;
 } // rl8()
 
 uint8_t CPU::rr8(uint8_t val)
 {
     uint8_t lsb = BIT(val, 0);
-    val = (val >> 1) + (AF.low() & FLAG_C ? 0x80 : 0x0);
+    val = (val >> 1) + (get_flags() & FLAG_C ? 0x80 : 0x0);
     uint8_t flags = 0;
     if(val == 0) 
         flags |= FLAG_Z;
     lsb ? flags |= FLAG_C : flags &= ~FLAG_C;
-
+    set_flags(flags);
     return val;
 } // rr8()
+
+uint8_t CPU::sla8(uint8_t val)
+{
+    uint8_t msb = BIT(val, 7);
+    val  <<= 1;
+	uint8_t flags = 0;
+    if(val == 0) 
+        flags |= FLAG_Z;
+    msb ? flags |= FLAG_C : flags &= ~FLAG_C;
+	set_flags(flags);
+	return val;
+} // sla8()
+
+uint8_t CPU::sra8(uint8_t val)
+{
+    uint8_t lsb = BIT(val, 0);
+    val = (val >> 1) + BIT(val, 7);
+	uint8_t flags = 0;
+    if(val  == 0) 
+        flags |= FLAG_Z;
+    lsb ? flags |= FLAG_C : flags&= ~FLAG_C;
+	set_flags(flags);
+	return val;
+} // sra8()
+
+uint8_t CPU::srl8(uint8_t val)
+{
+    uint8_t msb = BIT(val, 7);
+    val = val  >> 1;
+	uint8_t flags = 0;
+    if(val == 0) 
+        flags |= FLAG_Z;
+    msb ? flags |= FLAG_C : flags &= ~FLAG_C;
+	set_flags(flags);
+	return val;
+} // srl8()
+
+uint8_t CPU::swap8(uint8_t val)
+{
+    uint8_t temp = val >> 4;
+    val <<= 4;
+    val |= temp;
+	uint8_t flags = 0;
+    if(val == 0)
+        flags |= FLAG_Z;
+	set_flags(flags);
+	return val;
+} // swap8()
 
 void CPU::push(uint16_t val)
 {
@@ -1131,119 +1430,62 @@ void CPU::ret()
     PC = addr;
 } // ret()
 
-/*
-
-
-
-void CPU::add16_sp(uint8_t n)
+void CPU::daa()
 {
-    sp += n;
+	uint8_t flags = get_flags(), acc = AF.high();
+	uint8_t high = (acc & 0xf0) >> 8, low = acc & 0x0f;
 
-    Reg8 &F = reg8[REG_F];
-    F &= ~FLAG_Z;
-    F &= ~FLAG_N;
-    // TODO: Flags H and C???
-} // add16_sp()
+	typedef struct {
+		uint8_t cb, h1, h2, hb, l1, l2, n, ca;
+	} Entry;
+	static const Entry add_table[9] = {
+		{ 0		, 0x0, 0x9, 0	  , 0x0, 0x9, 0x00, 0      },
+		{ 0		, 0x0, 0x8, 0	  , 0xa, 0xf, 0x06, 0      },
+		{ 0		, 0x0, 0x9, FLAG_H, 0x0, 0x3, 0x06, 0 	   },
+		{ 0		, 0xa, 0xf, 0	  , 0x0, 0x9, 0x60, FLAG_C },
+		{ 0		, 0x9, 0xf, 0	  , 0xa, 0xf, 0x66, FLAG_C },
+		{ 0		, 0xa, 0xf, FLAG_H, 0x0, 0x3, 0x66, FLAG_C },
+		{ FLAG_C, 0x0, 0x2, 0	  , 0x0, 0x9, 0x60, FLAG_C },
+		{ FLAG_C, 0x0, 0x2, 0	  , 0xa, 0xf, 0x66, FLAG_C },
+		{ FLAG_C, 0x0, 0x3, FLAG_H, 0x0, 0x3, 0x66, FLAG_C },
+	};
+	static const Entry sub_table[4] = {
+		{ 0		, 0x0, 0x9, 0	  , 0x0, 0x9, 0x00, 0 	   },
+		{ 0		, 0x0, 0x8, FLAG_H, 0x6, 0xf, 0xfa, 0      },
+		{ FLAG_C, 0x7, 0xf, 0	  , 0x0, 0x9, 0xa0, FLAG_C },
+		{ FLAG_C, 0x6, 0xf, FLAG_H, 0x6, 0xf, 0x9a, FLAG_C },
+	};
 
-void CPU::swap8(uint8_t &n)
-{
-    uint8_t temp = n >> 4;
-    n <<= 4;
-    n |= temp;
+	if(flags & FLAG_N) { // Subtraction operations
+		for(int i = 0; i < 4; i++) {
+			Entry e = sub_table[i];
+			if((e.cb  == (flags & FLAG_C))
+			   && high >= e.h1 && high <= e.h2 
+			   && (e.hb  == (flags & FLAG_H))
+			   && low >= e.l1 && low <= e.l2) {
+				AF.set_high(acc + e.n);
+				flags |= e.ca;
+				break;
+			}
+		}
+	} else { // Addition operations
+		for(int i = 0; i < 9; i++) {
+			Entry e = add_table[i];
+			if((e.cb  == (flags & FLAG_C))
+			   && high >= e.h1 && high <= e.h2 
+			   && (e.hb  == (flags & FLAG_H))
+			   && low >= e.l1 && low <= e.l2) {
+				AF.set_high(acc + e.n);
+				flags |= e.ca;
+				break;
+			}
+		}
+	}
 
-    Reg8 &F = reg8[REG_F];
-    if(n == 0)
-        F |= FLAG_Z;
-    F &= ~(FLAG_N | FLAG_H | FLAG_C);
-} // swap8()
+	if(acc == 0) 
+		flags |= FLAG_Z;
+	else 
+		flags &= ~FLAG_Z;
 
-void CPU::cpl()
-{
-    reg8[REG_A] = ~reg8[REG_A];
-
-    Reg8 &F = reg8[REG_F];
-    F |= (FLAG_N | FLAG_H);
-} // cpl()
-
-void CPU::ccf()
-{
-    Reg8 &F = reg8[REG_F];
-    F &= ~(FLAG_N | FLAG_H);
-    if(F & FLAG_C) 
-        F &= ~FLAG_C;
-    else 
-        F |= FLAG_C;
-} // ccf()
-
-void CPU::scf()
-{
-    Reg8 &F = reg8[REG_F];
-    F &= ~(FLAG_N | FLAG_H);
-    F |= FLAG_C;
-} // scf()
-
-void CPU::bit(Reg8 r, uint8_t b)
-{
-    Reg8 &F = reg8[REG_F];
-    if(BIT(r, b))
-        F &= ~FLAG_Z;
-    else 
-        F |= FLAG_Z;
-    F &= ~FLAG_N;
-    F |= FLAG_H;
-} // bit()
-
-void CPU::rlc8(uint8_t &n)
-{
-    uint8_t msb = BIT(n, 7);
-    n = (n << 1) + (msb >> 7);
-    Reg8 &F = reg8[REG_F];
-    if(n == 0) 
-        F |= FLAG_Z;
-    F &= ~(FLAG_N | FLAG_H);
-    msb ? F |= FLAG_C : F &= ~FLAG_C;
-} // rlc8()
-
-
-
-
-
-void CPU::sla8(uint8_t &n)
-{
-    uint8_t msb = BIT(n, 7);
-    n <<= 1;
-    Reg8 &F = reg8[REG_F];
-    if(n == 0) 
-        F |= FLAG_Z;
-    F &= ~(FLAG_N | FLAG_H);
-    msb ? F |= FLAG_C : F &= ~FLAG_C;
-} // sla8()
-
-void CPU::sra8(uint8_t &n)
-{
-    uint8_t lsb = BIT(n, 0);
-    n = (n >> 1) + BIT(n, 7);
-    Reg8 &F = reg8[REG_F];
-    if(n == 0) 
-        F |= FLAG_Z;
-    F &= ~(FLAG_N | FLAG_H);
-    lsb ? F |= FLAG_C : F &= ~FLAG_C;
-} // sra8()
-
-void CPU::srl8(uint8_t &n)
-{
-    uint8_t msb = BIT(n, 7);
-    n = n >> 1;
-    Reg8 &F = reg8[REG_F];
-    if(n == 0) 
-        F |= FLAG_Z;
-    F &= ~(FLAG_N | FLAG_H);
-    msb ? F |= FLAG_C : F &= ~FLAG_C;
-} // srl8()
-
-void CPU::jp(uint16_t addr)
-{
-    pc = addr;
-} // jp()
-
-*/
+	set_flags(flags);
+} // daa()

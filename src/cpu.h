@@ -45,12 +45,18 @@ class CPU {
 
         bool interrupts;
 
+        uint8_t get_flags() const { return AF.low(); };
+        void set_flags(uint8_t f) { AF.set_low(f); };
+
     //
     // Instruction Functions
     //
 
+        void handle_cb_op();
+
         void load16_imm(Register&);
         void add16_hl(Register&);
+        void add16_sp(uint8_t);
         void add8(uint8_t);
         void addc8(uint8_t);
         void sub8(uint8_t);
@@ -61,61 +67,23 @@ class CPU {
         void cp8(uint8_t); 
         uint8_t inc8(uint8_t);
         uint8_t dec8(uint8_t);
-        uint8_t rlc8(uint8_t);
-        uint8_t rrc8(uint8_t);
-        uint8_t rl8(uint8_t);
-        uint8_t rr8(uint8_t);
 
         void push(uint16_t);
         void pop(uint16_t&);
         void call(uint16_t);
         void ret();
 
-        /*
-        void load16_imm();
+        void daa();
 
-        // For these ops, n is a reg, imm, or mem val. 
-        // Result stored in A.
+        uint8_t swap8(uint8_t);
+        uint8_t rlc8(uint8_t);
+        uint8_t rrc8(uint8_t);
+        uint8_t rl8(uint8_t);
+        uint8_t rr8(uint8_t);
+        uint8_t sla8(uint8_t);
+        uint8_t sra8(uint8_t);
+        uint8_t srl8(uint8_t);
 
-
-
-        // n is a reg or mem val.
-        void inc8(uint8_t &n);
-        void dec8(uint8_t &n);
-        void swap8(uint8_t &n);
-        // Rotates left or right.
-        void rr8(uint8_t &n);
-        // Shifts left or right.
-        void sla8(uint8_t &n);
-        void sra8(uint8_t &n);
-        void srl8(uint8_t &n);
-
-        // Add Reg16 to HL.
-        // Add imm n to SP.
-        void add16_sp(uint8_t n);
-
-        void inc16(Reg16 &r) { r++; };
-        void dec16(Reg16 &r) { r--; };
-
-        // Complement A.
-        void cpl();
-        // Complement Carry flag.
-        void ccf();
-        // Set Carry flag.
-        void scf();
-
-        // Bit operations.
-        void bit(Reg8 r, uint8_t b);
-        void set(Reg8 &r, uint8_t b) { r |= 1 << b; };
-        void res(Reg8 &r, uint8_t b) { r &= ~(1 << b); };
-    
-        // Jumps.
-        void jp(uint16_t addr);
-        void jr(uint8_t offset);
-
-        // Stack operations.
-
-        */
 };
 
 #endif 
