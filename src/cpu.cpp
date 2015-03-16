@@ -16,31 +16,27 @@ CPU::CPU() : op_table(build_op_table()), mem(65536)
     PC = 0x100;
     SP = 0xFFFE;
 
-    interrupts = true;
-
-    std::ifstream in("src/code", std::ios::binary | std::ios::in);
-    vector<uint8_t> bytes;
-    char byte;
-
-    while(!in.eof()) {
-        in.read(&byte, 1);
-        bytes.push_back(byte);
-    }
-
-    in.close();
-
-    mem.load_bytes_to(0x100, bytes);
+    mem[InterruptEnableReg] = 0x1f;
 
 } // Constructor
 
 void CPU::run() 
 {
-    while(mem[PC] != 0x76) {
-        cout << std::hex << (unsigned int)mem[PC] << std::dec << endl;
+    while(true) {
+        if(interrupt_generated())
+            handle_interrupt();
+        cout << std::hex << "OP = 0x" << (unsigned int)mem[PC] 
+			 << std::dec << endl;
         op_table[mem[PC]]();
+		print_registers();
         PC++;
     }
 } // run()
+
+void CPU::load_data_to(Memory::usize addr, vector<uint8_t> data)
+{
+	mem.load_bytes_to(addr, data);
+} // load_data_to()
 
 void CPU::print_registers() const
 {
@@ -48,6 +44,25 @@ void CPU::print_registers() const
     cout << "AF -> " << setw(2) << AF << "    BC -> " << setw(2) << BC << endl; 
     cout << "DE -> " << setw(2) << DE << "    HL -> " << setw(2) << HL << endl; 
 } // print_registers()
+
+void CPU::handle_interrupt()
+{
+    cout << "HANDLING INTERRUPT" << endl;
+    uint8_t IF = mem[InterruptFlagReg];
+    mem[InterruptEnableReg] = 0x0;
+    mem[InterruptFlagReg] = 0x0;
+    push(PC);
+    if(IF & IVBlank) 
+        PC = 0x0040;
+    else if(IF & ILCDCStatus)
+        PC = 0x0048;
+    else if(IF & ITimerOverflow)
+        PC = 0x0050;
+    else if(IF & ISerialTransfer)
+        PC = 0x0058;
+    else if(IF & IButtonPress)
+        PC = 0x0060;
+} // handle_interrupt()
 
 const vector<CPU::Instruction> CPU::build_op_table() 
 {
@@ -117,7 +132,9 @@ const vector<CPU::Instruction> CPU::build_op_table()
         cycles = 4;
     };
     ops[0x10] = [this]() { // STOP
-        while(true) // TODO: Implement STOP
+        if(mem[InterruptEnableReg]) {
+            while(!(mem[InterruptFlagReg] & IButtonPress));
+        }
         cycles = 4;
     };
     ops[0x11] = [this]() { // LD DE,nn
@@ -149,7 +166,7 @@ const vector<CPU::Instruction> CPU::build_op_table()
         cycles = 4;
     };
     ops[0x18] = [this]() { // JR n
-        PC = PC + mem[++PC];
+        PC = PC + sign_extend(mem[++PC]) - 1;
         cycles = 12;
     };
     ops[0x19] = [this]() { // ADD HL,DE
@@ -182,7 +199,7 @@ const vector<CPU::Instruction> CPU::build_op_table()
     };
     ops[0x20] = [this]() { // JR NZ,n
         if(!(get_flags() & FLAG_Z)) {
-            PC = PC + mem[PC+1];
+            PC = PC + sign_extend(mem[PC+1]) - 1;
             cycles = 12;
         } else {
             PC++;
@@ -219,7 +236,7 @@ const vector<CPU::Instruction> CPU::build_op_table()
     };
     ops[0x28] = [this]() { // JR Z,n
         if(get_flags() & FLAG_Z) {
-            PC = PC + mem[PC+1];
+            PC = PC + sign_extend(mem[PC+1]) - 1;
             cycles = 12;
         } else {
             PC++;
@@ -257,7 +274,7 @@ const vector<CPU::Instruction> CPU::build_op_table()
     };
     ops[0x30] = [this]() { // JR NC,n
         if(!(get_flags() & FLAG_C)) {
-            PC = PC + mem[PC+1];
+            PC = PC + sign_extend(mem[PC+1]) - 1;
             cycles = 12;
         } else {
             PC++;
@@ -295,7 +312,7 @@ const vector<CPU::Instruction> CPU::build_op_table()
     };
     ops[0x38] = [this]() { // JR C,n
         if(get_flags() & FLAG_C) {
-            PC = PC + mem[PC+1];
+            PC = PC + sign_extend(mem[PC+1]) - 1;
             cycles = 12;
         } else {
             PC++;
@@ -549,7 +566,12 @@ const vector<CPU::Instruction> CPU::build_op_table()
         cycles = 8;
     };
     ops[0x76] = [this]() { // HALT
-        while(true); // TODO: Implement HALT
+        if(mem[InterruptEnableReg]) {
+            while(!interrupt_generated())
+                cout << "WAITING" << endl;
+            PC++;
+            handle_interrupt();
+        } 
         cycles = 4;
     };
     ops[0x77] = [this]() { // LD (HL),A
@@ -859,7 +881,7 @@ const vector<CPU::Instruction> CPU::build_op_table()
     };
     ops[0xc2] = [this]() { // JP NZ,nn
         if(!(get_flags() & FLAG_Z)) {
-            PC = mem.get16(PC+1); 
+            PC = mem.get16(PC+1) - 1; 
             cycles = 16;
         } else {
             PC = PC + 2;
@@ -867,12 +889,12 @@ const vector<CPU::Instruction> CPU::build_op_table()
         }
     };
     ops[0xc3] = [this]() { // JP nn
-        PC = mem.get16(PC+1); 
+        PC = mem.get16(PC+1) - 1; 
         cycles = 16;
     };
     ops[0xc4] = [this]() { // CALL NZ,nn
         if(!(get_flags() & FLAG_Z)) {
-            call(mem.get16(PC+1)); 
+            call(mem.get16(PC+1));
             cycles = 24;
         } else {
             PC = PC + 2;
@@ -904,7 +926,7 @@ const vector<CPU::Instruction> CPU::build_op_table()
     };
     ops[0xca] = [this]() { // JP Z,nn
         if(get_flags() & FLAG_Z) {
-            PC = mem.get16(PC+1); 
+            PC = mem.get16(PC+1) - 1; 
             cycles = 16;
         } else {
             PC = PC + 2;
@@ -950,7 +972,7 @@ const vector<CPU::Instruction> CPU::build_op_table()
     };
     ops[0xd2] = [this]() { // JP NC,nn
         if(!(get_flags() & FLAG_C)) {
-            PC = mem.get16(PC+1); 
+            PC = mem.get16(PC+1) - 1; 
             cycles = 16;
         } else {
             PC = PC + 2;
@@ -987,12 +1009,12 @@ const vector<CPU::Instruction> CPU::build_op_table()
     };
     ops[0xd9] = [this]() { // RETI
         ret();
-        interrupts = true;
+        mem[InterruptEnableReg] = 0x1f;
         cycles = 16;
     };
     ops[0xda] = [this]() { // JP C,nn
         if(get_flags() & FLAG_C) {
-            PC = mem.get16(PC+1); 
+            PC = mem.get16(PC+1) - 1; 
             cycles = 16;
         } else {
             PC = PC + 2;
@@ -1047,7 +1069,7 @@ const vector<CPU::Instruction> CPU::build_op_table()
         cycles = 16;
     };
     ops[0xe9] = [this]() { // JP (HL)
-        PC = HL;
+        PC = HL - 1;
         cycles = 4;
     };
     ops[0xea] = [this]() { // LD (nn),A
@@ -1078,7 +1100,7 @@ const vector<CPU::Instruction> CPU::build_op_table()
         cycles = 8;
     };
     ops[0xf3] = [this]() { // DI
-        interrupts = false;
+        mem[InterruptEnableReg] = 0x0;
         cycles = 4;
     };
     ops[0xf5] = [this]() { // PUSH AF
@@ -1094,8 +1116,8 @@ const vector<CPU::Instruction> CPU::build_op_table()
         cycles = 16;
     };
     ops[0xf8] = [this]() { // LD HL,SP+n
-        HL = SP + mem[++PC];
-        // TODO: Add flag handling, and handle signed n (?)
+        HL = SP + sign_extend(mem[++PC]);
+        // TODO: Add flag handling
         cycles = 12;
     };
     ops[0xf9] = [this]() { // LD SP,HL
@@ -1108,7 +1130,8 @@ const vector<CPU::Instruction> CPU::build_op_table()
         cycles = 16;
     };
     ops[0xfb] = [this]() { // EI
-        interrupts = true;
+        mem[InterruptEnableReg] = 0x1f;
+        cycles = 4;
     };
     ops[0xfe] = [this]() { // CP,n
         cp8(mem[++PC]);
@@ -1203,7 +1226,7 @@ void CPU::add16_hl(Register& r)
 
 void CPU::add16_sp(uint8_t val)
 {
-    SP = SP + val;
+    SP = SP + sign_extend(val);
     uint8_t flags = 0;
     // TODO: Flags H and C???
     set_flags(flags);
@@ -1420,14 +1443,14 @@ void CPU::pop(uint16_t& val)
 void CPU::call(uint16_t addr)
 {
     push(PC + 3);
-    PC = addr;
+    PC = addr - 1;
 } // call()
 
 void CPU::ret()
 {
     uint16_t addr;
     pop(addr);
-    PC = addr;
+    PC = addr - 1;
 } // ret()
 
 void CPU::daa()
@@ -1489,3 +1512,11 @@ void CPU::daa()
 
 	set_flags(flags);
 } // daa()
+
+uint16_t sign_extend(uint8_t byte)
+{
+    if(byte & 0x80) 
+        return 0xff00 + byte;
+    else 
+        return 0x0000 + byte;
+} // sign_extend()

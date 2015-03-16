@@ -2,7 +2,8 @@
 log/
 obj/
 
-.swp
+*.swp
+*.gb
 
 # Compiled Object files
 *.slo

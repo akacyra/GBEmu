@@ -24,6 +24,7 @@ class CPU {
         void run();
 
         void print_registers() const;
+        void load_data_to(Memory::usize addr, std::vector<uint8_t> data);
 
     private:
         typedef std::function<void()> Instruction;
@@ -43,10 +44,24 @@ class CPU {
 
         uint8_t cycles;
 
-        bool interrupts;
-
         uint8_t get_flags() const { return AF.low(); };
         void set_flags(uint8_t f) { AF.set_low(f); };
+
+        const uint16_t InterruptEnableReg = 0xffff;
+        const uint16_t InterruptFlagReg = 0xff0f;
+
+        typedef enum {
+            IVBlank         = 0x01,
+            ILCDCStatus     = 0x02,
+            ITimerOverflow  = 0x04 ,
+            ISerialTransfer = 0x08,
+            IButtonPress    = 0x10,
+        } Interrupt;
+
+        bool interrupt_generated() const { 
+            return mem[InterruptEnableReg] && mem[InterruptFlagReg]; 
+        };
+        void handle_interrupt();
 
     //
     // Instruction Functions
@@ -85,5 +100,7 @@ class CPU {
         uint8_t srl8(uint8_t);
 
 };
+
+uint16_t sign_extend(uint8_t);
 
 #endif 
